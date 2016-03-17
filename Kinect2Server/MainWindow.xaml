@@ -9,7 +9,7 @@
         <TextBox Name="colorIPBox" HorizontalAlignment="Left" Height="24" Margin="45,225,0,0" TextWrapping="Wrap" Text="None yet" VerticalAlignment="Top" Width="120"/>
         <Label Content="Color IP:" HorizontalAlignment="Left" Height="30" Margin="40,200,0,0" VerticalAlignment="Top" Width="100" RenderTransformOrigin="0.354,2.167"/>
         <Label Content="Depth IP:" HorizontalAlignment="Left" Height="30" Margin="195,200,0,0" VerticalAlignment="Top" Width="70"/>
-        <TextBox Name="depthIPBox" HorizontalAlignment="Left" Height="24" Margin="200,225,0,0" TextWrapping="Wrap" Text="None yet" VerticalAlignment="Top" Width="120"/>
+        <TextBox Name="locationIPBox" HorizontalAlignment="Left" Height="24" Margin="200,225,0,0" TextWrapping="Wrap" Text="None yet" VerticalAlignment="Top" Width="120"/>
         <Label Content="Frame Rate:" HorizontalAlignment="Left" Margin="40,260,0,0" VerticalAlignment="Top" Width="80"/>
         <TextBox Name="IRipBox" HorizontalAlignment="Left" Height="24" Margin="370,225,0,0" TextWrapping="Wrap" Text="None yet" VerticalAlignment="Top" Width="120"/>
         <Label Content="IR IP:" HorizontalAlignment="Left" Height="30" Margin="365,200,0,0" VerticalAlignment="Top" Width="70"/>

@@ -53,7 +53,7 @@ namespace Kinect2Server
         {
             this.localPCName = System.Environment.MachineName;
             IPHostEntry selfInfo = Dns.GetHostEntry(this.localPCName);
-            this.selfIPaddress = selfInfo.AddressList[0];
+            this.selfIPaddress = IPAddress.Parse("192.168.236.1");
             this.selfEndPoint = new IPEndPoint(this.selfIPaddress, this.selfPortNumber);
             this.connectedClientList = new SynchronizedCollection<FlaggedSocket>();
             this.listenerSocket.Bind(this.selfEndPoint);
@@ -182,67 +182,58 @@ namespace Kinect2Server
         private MultiSourceFrameReader reader = null;
 
         private byte[] colourArray = null;
+        private CoordinateMapper coordinateMapper = null;
         private ushort[] depthArray = null;
-        private ushort[] IRArray = null;
-        private byte[] byteDepthArray = null;
-        private byte[] byteIRArray = null;
+        private CameraSpacePoint[] mappedSpaceArray = null;
+        private ushort[] locationArray = null;
+        private byte[] byteLocationArray = null;
 
         private double numFramesPassed = 0;
-        private int deltaTimeForFPS = 1;//In seconds
+        private double deltaTimeForFPS = 0.5;//In seconds
         private DateTime updateFPSMilestone = DateTime.Now;
 
         private readonly int bytesPerColorPixel = (PixelFormats.Bgr32.BitsPerPixel + 7) / 8;
-        private readonly int bytesPerDepthPixel = 2;
-        private readonly int bytesPerIRPixel = 2;
+        private readonly int bytesPerLocationPixel = 6;
 
         //TCP/IP crap
         private AsyncNetworkConnectorServer colorConnector = null;
-        private AsyncNetworkConnectorServer depthConnector = null;
-        private AsyncNetworkConnectorServer IRConnector = null;
+        private AsyncNetworkConnectorServer locationConnector = null;
 
-        private const int BUFFER_SIZE_COLOR = 8294400;
-        private const int BUFFER_SIZE_DEPTH = 4147200;
-        private const int BUFFER_SIZE_IR = 4147200;
+        private const int BUFFER_SIZE_COLOR = 1920 * 1080 * 4;
+        private const int BUFFER_SIZE_LOCATION = 1920 * 1080 * 3;
 
         private const int colorPort = 9000;
-        private const int depthPort = 18000;
-        private const int IRPort = 27000;
+        private const int locationPort = 18000;
 
         private const string hostName = "herb2";
         //End of TCP/IP crap
-
-        //Not Needed
-        public WriteableBitmap colorBitMap;
-        //private WriteableBitmap depthBitMap;
-        //private WriteableBitmap IRBitMap;
-        //End of not needed
 
         public MainWindow()
         {
             this.InitializeComponent();
             this.stopwatch = new Stopwatch();
             this.stopwatch.Start();
-            this.kinect = KinectSensor.Default;
+            this.kinect = KinectSensor.GetDefault();
+            this.coordinateMapper = kinect.CoordinateMapper;
+
             if (this.kinect != null)
             {
                 this.kinect.Open();
 
-                this.colourArray = new byte[this.kinect.ColorFrameSource.FrameDescription.Height * this.kinect.ColorFrameSource.FrameDescription.Width * this.bytesPerColorPixel];
-                this.depthArray = new ushort[this.kinect.DepthFrameSource.FrameDescription.Height * this.kinect.DepthFrameSource.FrameDescription.Width];
-                this.IRArray = new ushort[this.kinect.InfraredFrameSource.FrameDescription.Height * this.kinect.InfraredFrameSource.FrameDescription.Width];
-                this.byteDepthArray = new byte[this.kinect.DepthFrameSource.FrameDescription.Height * this.kinect.DepthFrameSource.FrameDescription.Width * this.bytesPerDepthPixel];
-                this.byteIRArray = new byte[this.kinect.InfraredFrameSource.FrameDescription.Height * this.kinect.InfraredFrameSource.FrameDescription.Width * this.bytesPerIRPixel];
+                int colorHeight = kinect.ColorFrameSource.FrameDescription.Height;
+                int colorWidth = kinect.ColorFrameSource.FrameDescription.Width;
+                int depthHeight = kinect.DepthFrameSource.FrameDescription.Height;
+                int depthWidth = kinect.DepthFrameSource.FrameDescription.Width;
 
-                this.reader = this.kinect.OpenMultiSourceFrameReader(FrameSourceTypes.Color | FrameSourceTypes.Depth | FrameSourceTypes.Infrared);
+                this.colourArray = new byte[colorHeight * colorWidth * bytesPerColorPixel];
+                this.depthArray = new ushort[depthHeight * depthWidth];
+                this.mappedSpaceArray = new CameraSpacePoint[colorHeight * colorWidth];
+                this.locationArray = new ushort[colorHeight * colorWidth * 3];
+                this.byteLocationArray = new byte[colorHeight * colorWidth * bytesPerLocationPixel];
+
+                this.reader = this.kinect.OpenMultiSourceFrameReader(FrameSourceTypes.Color | FrameSourceTypes.Depth);
                 this.reader.MultiSourceFrameArrived += this.frameArrivedCallback;
                 this.updateFPSMilestone = DateTime.Now + TimeSpan.FromSeconds(this.deltaTimeForFPS);
-
-                this.colorBitMap = new WriteableBitmap(this.kinect.ColorFrameSource.FrameDescription.Width,
-                                                        this.kinect.ColorFrameSource.FrameDescription.Height,
-                                                        96.0, 96.0, PixelFormats.Bgr32, null);
-
-                //this.depthBitMap = new WriteableBitmap(depthFrameDescription.Width, depthFrameDescription.Height, 96.0, 96.0, PixelFormats.Bgr32, null);
-                //this.IRBitMap = new WriteableBitmap(IRFrameDescription.Width, IRFrameDescription.Height, 96.0, 96.0, PixelFormats.Bgr32, null);
             }
         }
 
@@ -250,16 +241,13 @@ namespace Kinect2Server
         {
             //instantiate sockets and get ip addresses. 
             this.colorConnector = new AsyncNetworkConnectorServer(colorPort);
-            this.depthConnector = new AsyncNetworkConnectorServer(depthPort);
-            this.IRConnector = new AsyncNetworkConnectorServer(IRPort);
+            this.locationConnector = new AsyncNetworkConnectorServer(locationPort);
 
             this.colorIPBox.Text = this.colorConnector.selfEndPoint.ToString();
-            this.depthIPBox.Text = this.depthConnector.selfEndPoint.ToString();
-            this.IRipBox.Text = this.IRConnector.selfEndPoint.ToString();
+            this.locationIPBox.Text = this.locationConnector.selfEndPoint.ToString();
             //Create the connections
             this.colorConnector.startListening();
-            this.depthConnector.startListening();
-            this.IRConnector.startListening();
+            this.locationConnector.startListening();
         }
 
         private void MainWindow_Closing(object sender, CancelEventArgs e)
@@ -275,17 +263,7 @@ namespace Kinect2Server
                 this.kinect = null;
             }
             this.colorConnector.closeSocket();
-            this.depthConnector.closeSocket();
-            this.IRConnector.closeSocket();
-
-        }
-
-        public ImageSource dispColor
-        {
-            get
-            {
-                return this.colorBitMap;
-            }
+            this.locationConnector.closeSocket();
         }
 
         private void frameArrivedCallback(object sender, MultiSourceFrameArrivedEventArgs e)
@@ -301,18 +279,13 @@ namespace Kinect2Server
                 this.numFramesPassed = 0;
                 this.statusBox.Text = fps.ToString();
             }
+            else return;
             MultiSourceFrame multiSourceFrame = e.FrameReference.AcquireFrame();
             using (ColorFrame cFrame = multiSourceFrame.ColorFrameReference.AcquireFrame())
             {
                 if (cFrame != null)
                 {
                     cFrame.CopyConvertedFrameDataToArray(this.colourArray, ColorImageFormat.Bgra);
-                    //Not Needed
-                    this.colorBitMap.WritePixels(new Int32Rect(0, 0, cFrame.FrameDescription.Width, cFrame.FrameDescription.Height),
-                                                    this.colourArray,
-                                                    cFrame.FrameDescription.Width * this.bytesPerColorPixel,
-                                                    0);
-                    colorOutput.Source = this.colorBitMap;
                     colorConnector.sendToAll(this.colourArray);
                 }
             }
@@ -321,17 +294,14 @@ namespace Kinect2Server
                 if (dFrame != null)
                 {
                     dFrame.CopyFrameDataToArray(this.depthArray);   //Ushort Array ! Use BitConverter.getBytes() to convert to two bytes per each uShort. it gives low byte followed by high byte
-                    Buffer.BlockCopy(this.depthArray, 0, this.byteDepthArray, 0, this.byteDepthArray.Length);
-                    this.depthConnector.sendToAll(this.byteDepthArray);
-                }
-            }
-            using (InfraredFrame IRFrame = multiSourceFrame.InfraredFrameReference.AcquireFrame())
-            {
-                if (IRFrame != null)
-                {
-                    IRFrame.CopyFrameDataToArray(this.IRArray);     //Ushort Array ! Use BitConverter.getBytes() to convert to two bytes per each uShort. it gives low byte followed by high byte
-                    Buffer.BlockCopy(this.IRArray, 0, this.byteIRArray, 0, this.byteIRArray.Length);
-                    this.IRConnector.sendToAll(this.byteIRArray);
+                    coordinateMapper.MapColorFrameToCameraSpace(depthArray, mappedSpaceArray);
+                    Parallel.For(0, mappedSpaceArray.Length, (i)=> {
+                        locationArray[3 * i] = (ushort)(mappedSpaceArray[i].X * 1000);
+                        locationArray[3 * i + 1] = (ushort)(mappedSpaceArray[i].Y * 1000);
+                        locationArray[3 * i + 2] = (ushort)(mappedSpaceArray[i].Z * 1000);
+                    });
+                    Buffer.BlockCopy(this.locationArray, 0, this.byteLocationArray, 0, this.byteLocationArray.Length);
+                    this.locationConnector.sendToAll(this.byteLocationArray);
                 }
             }
         }
