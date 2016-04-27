@@ -18,6 +18,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
+using Newtonsoft.Json;
 
 namespace Kinect2Server
 {
@@ -53,7 +54,7 @@ namespace Kinect2Server
         {
             this.localPCName = System.Environment.MachineName;
             IPHostEntry selfInfo = Dns.GetHostEntry(this.localPCName);
-            this.selfIPaddress = IPAddress.Parse("192.168.236.1");
+            this.selfIPaddress = IPAddress.Parse("0.0.0.0");
             this.selfEndPoint = new IPEndPoint(this.selfIPaddress, this.selfPortNumber);
             this.connectedClientList = new SynchronizedCollection<FlaggedSocket>();
             this.listenerSocket.Bind(this.selfEndPoint);
@@ -95,7 +96,7 @@ namespace Kinect2Server
                 if (tempSocket.socket.Connected)
                 {
                     int sentBytes = tempSocket.socket.EndSend(ar);
-                    Console.WriteLine("Number of Bytes sent = " + sentBytes.ToString());
+                    //Console.WriteLine("Number of Bytes sent = " + sentBytes.ToString());
                     tempSocket.prevSendDoneFlag = true;
                 }
             }
@@ -125,7 +126,7 @@ namespace Kinect2Server
                 }
                 else
                 {
-                    Console.WriteLine("Skipping");
+                    //Console.WriteLine("Skipping");
                 }
 
             }
@@ -185,11 +186,13 @@ namespace Kinect2Server
         private CoordinateMapper coordinateMapper = null;
         private ushort[] depthArray = null;
         private CameraSpacePoint[] mappedSpaceArray = null;
-        private ushort[] locationArray = null;
+        private short[] locationArray = null;
         private byte[] byteLocationArray = null;
+        private Body[] bodyArray = null;
+        private byte[] bodyBuffer = null;
 
         private double numFramesPassed = 0;
-        private double deltaTimeForFPS = 0.5;//In seconds
+        private double deltaTimeForFPS = 0.2;//In seconds
         private DateTime updateFPSMilestone = DateTime.Now;
 
         private readonly int bytesPerColorPixel = (PixelFormats.Bgr32.BitsPerPixel + 7) / 8;
@@ -198,15 +201,22 @@ namespace Kinect2Server
         //TCP/IP crap
         private AsyncNetworkConnectorServer colorConnector = null;
         private AsyncNetworkConnectorServer locationConnector = null;
+        private AsyncNetworkConnectorServer bodyConnector = null;
 
         private const int BUFFER_SIZE_COLOR = 1920 * 1080 * 4;
         private const int BUFFER_SIZE_LOCATION = 1920 * 1080 * 3;
+        private const int BUFFER_SIZE_BODY = 60000;
 
         private const int colorPort = 9000;
+        private const int bodyPort = 9003;
         private const int locationPort = 18000;
 
         private const string hostName = "herb2";
         //End of TCP/IP crap
+
+        private BodyFrameReader bodyReader = null;
+
+        private int cnt = 0;
 
         public MainWindow()
         {
@@ -225,14 +235,24 @@ namespace Kinect2Server
                 int depthHeight = kinect.DepthFrameSource.FrameDescription.Height;
                 int depthWidth = kinect.DepthFrameSource.FrameDescription.Width;
 
+                Console.WriteLine(colorWidth);
+                Console.WriteLine(colorHeight);
+                Console.WriteLine(depthWidth);
+                Console.WriteLine(depthHeight);
+
+                this.reader = this.kinect.OpenMultiSourceFrameReader(FrameSourceTypes.Color | FrameSourceTypes.Depth);
+                this.bodyReader = this.kinect.BodyFrameSource.OpenReader();
+
                 this.colourArray = new byte[colorHeight * colorWidth * bytesPerColorPixel];
                 this.depthArray = new ushort[depthHeight * depthWidth];
                 this.mappedSpaceArray = new CameraSpacePoint[colorHeight * colorWidth];
-                this.locationArray = new ushort[colorHeight * colorWidth * 3];
+                this.locationArray = new short[colorHeight * colorWidth * 3];
                 this.byteLocationArray = new byte[colorHeight * colorWidth * bytesPerLocationPixel];
+                this.bodyArray = new Body[kinect.BodyFrameSource.BodyCount];
+                this.bodyBuffer = new byte[BUFFER_SIZE_BODY];
 
-                this.reader = this.kinect.OpenMultiSourceFrameReader(FrameSourceTypes.Color | FrameSourceTypes.Depth);
                 this.reader.MultiSourceFrameArrived += this.frameArrivedCallback;
+                this.bodyReader.FrameArrived += this.bodyArrivedCallback;
                 this.updateFPSMilestone = DateTime.Now + TimeSpan.FromSeconds(this.deltaTimeForFPS);
             }
         }
@@ -242,12 +262,14 @@ namespace Kinect2Server
             //instantiate sockets and get ip addresses. 
             this.colorConnector = new AsyncNetworkConnectorServer(colorPort);
             this.locationConnector = new AsyncNetworkConnectorServer(locationPort);
+            this.bodyConnector = new AsyncNetworkConnectorServer(bodyPort);
 
             this.colorIPBox.Text = this.colorConnector.selfEndPoint.ToString();
             this.locationIPBox.Text = this.locationConnector.selfEndPoint.ToString();
             //Create the connections
             this.colorConnector.startListening();
             this.locationConnector.startListening();
+            this.bodyConnector.startListening();
         }
 
         private void MainWindow_Closing(object sender, CancelEventArgs e)
@@ -264,6 +286,22 @@ namespace Kinect2Server
             }
             this.colorConnector.closeSocket();
             this.locationConnector.closeSocket();
+            this.bodyConnector.closeSocket();
+        }
+
+        private void bodyArrivedCallback(object sender, BodyFrameArrivedEventArgs e)
+        {
+            //Console.WriteLine("body frame arrived!");
+            using (BodyFrame bodyFrame = e.FrameReference.AcquireFrame())
+            {
+                if (bodyFrame != null)
+                {
+                    bodyFrame.GetAndRefreshBodyData(this.bodyArray);
+                    string jsonString = JsonConvert.SerializeObject(this.bodyArray);
+                    System.Buffer.BlockCopy(ASCIIEncoding.ASCII.GetBytes(jsonString), 0, bodyBuffer, 0, jsonString.Length);
+                    this.bodyConnector.sendToAll(bodyBuffer);
+                }
+            }
         }
 
         private void frameArrivedCallback(object sender, MultiSourceFrameArrivedEventArgs e)
@@ -295,16 +333,25 @@ namespace Kinect2Server
                 {
                     dFrame.CopyFrameDataToArray(this.depthArray);   //Ushort Array ! Use BitConverter.getBytes() to convert to two bytes per each uShort. it gives low byte followed by high byte
                     coordinateMapper.MapColorFrameToCameraSpace(depthArray, mappedSpaceArray);
-                    Parallel.For(0, mappedSpaceArray.Length, (i)=> {
-                        locationArray[3 * i] = (ushort)(mappedSpaceArray[i].X * 1000);
-                        locationArray[3 * i + 1] = (ushort)(mappedSpaceArray[i].Y * 1000);
-                        locationArray[3 * i + 2] = (ushort)(mappedSpaceArray[i].Z * 1000);
-                    });
+                    for (int i = 0; i < mappedSpaceArray.Length; i++)
+                    { 
+                        locationArray[3 * i] = ToShortLocation(mappedSpaceArray[i].X);
+                        locationArray[3 * i + 1] = ToShortLocation(mappedSpaceArray[i].Y);
+                        locationArray[3 * i + 2] = ToShortLocation(mappedSpaceArray[i].Z);
+                    }
                     Buffer.BlockCopy(this.locationArray, 0, this.byteLocationArray, 0, this.byteLocationArray.Length);
                     this.locationConnector.sendToAll(this.byteLocationArray);
                 }
             }
         }
+
+        private short ToShortLocation(float location)
+        {
+            if (location < -100) return 0;
+            if (location < -10 || location > 10)
+                Console.WriteLine(location);
+            return (short)(location * 1000);
+        } 
 
         private void statusBox_TextChanged(object sender, TextChangedEventArgs e)
         {
