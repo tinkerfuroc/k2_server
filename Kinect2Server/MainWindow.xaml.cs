@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Kinect;
+using Microsoft.Kinect.Face;
 using System.Net.Sockets;
 using System.Net;
 using System.Threading;
@@ -181,6 +182,8 @@ namespace Kinect2Server
         private KinectSensor kinect = null;
         private Stopwatch stopwatch = null;
         private MultiSourceFrameReader reader = null;
+        private BodyFrameReader bodyReader = null;
+        private FaceFrameReader faceReader = null;
 
         private byte[] colourArray = null;
         private CoordinateMapper coordinateMapper = null;
@@ -190,6 +193,11 @@ namespace Kinect2Server
         private byte[] byteLocationArray = null;
         private Body[] bodyArray = null;
         private byte[] bodyBuffer = null;
+        private FaceFrameSource[] faceFrameSources = null;
+        private FaceFrameReader[] faceFrameReaders = null;
+        private FaceFrameResult[] faceFrameResults = null;
+        private byte[] faceBuffer = null;
+        //private int bodyCount;
 
         private double numFramesPassed = 0;
         private double deltaTimeForFPS = 0.2;//In seconds
@@ -202,21 +210,22 @@ namespace Kinect2Server
         private AsyncNetworkConnectorServer colorConnector = null;
         private AsyncNetworkConnectorServer locationConnector = null;
         private AsyncNetworkConnectorServer bodyConnector = null;
+        private AsyncNetworkConnectorServer faceConnector = null;
 
         private const int BUFFER_SIZE_COLOR = 1920 * 1080 * 4;
         private const int BUFFER_SIZE_LOCATION = 1920 * 1080 * 3;
         private const int BUFFER_SIZE_BODY = 60000;
+        private const int BUFFER_SIZE_FACE = 60000; //TODO  confirm the size
 
         private const int colorPort = 9000;
         private const int bodyPort = 9003;
+        private const int facePort = 9006; // TODO  confirm the port
         private const int locationPort = 18000;
 
         private const string hostName = "herb2";
         //End of TCP/IP crap
 
-        private BodyFrameReader bodyReader = null;
-
-        private int cnt = 0;
+        //private int cnt = 0;
 
         public MainWindow()
         {
@@ -228,17 +237,12 @@ namespace Kinect2Server
 
             if (this.kinect != null)
             {
-                this.kinect.Open();
-
                 int colorHeight = kinect.ColorFrameSource.FrameDescription.Height;
                 int colorWidth = kinect.ColorFrameSource.FrameDescription.Width;
                 int depthHeight = kinect.DepthFrameSource.FrameDescription.Height;
                 int depthWidth = kinect.DepthFrameSource.FrameDescription.Width;
-
-                Console.WriteLine(colorWidth);
-                Console.WriteLine(colorHeight);
-                Console.WriteLine(depthWidth);
-                Console.WriteLine(depthHeight);
+                Debug.WriteLine("ColorFrame: " + colorHeight + "*" + colorWidth);
+                Debug.WriteLine("DepthFrame: " + depthHeight + "*" + depthWidth);
 
                 this.reader = this.kinect.OpenMultiSourceFrameReader(FrameSourceTypes.Color | FrameSourceTypes.Depth);
                 this.bodyReader = this.kinect.BodyFrameSource.OpenReader();
@@ -251,9 +255,42 @@ namespace Kinect2Server
                 this.bodyArray = new Body[kinect.BodyFrameSource.BodyCount];
                 this.bodyBuffer = new byte[BUFFER_SIZE_BODY];
 
+                // create a face frame source + reader to track each face in the FOV
+                this.faceFrameSources = new FaceFrameSource[kinect.BodyFrameSource.BodyCount];
+                this.faceFrameReaders = new FaceFrameReader[kinect.BodyFrameSource.BodyCount];
+                // specify the required face frame results
+                FaceFrameFeatures faceFrameFeatures =
+                    FaceFrameFeatures.BoundingBoxInColorSpace
+                    | FaceFrameFeatures.PointsInColorSpace
+                    | FaceFrameFeatures.RotationOrientation
+                    | FaceFrameFeatures.FaceEngagement
+                    | FaceFrameFeatures.Glasses
+                    | FaceFrameFeatures.Happy
+                    | FaceFrameFeatures.LeftEyeClosed
+                    | FaceFrameFeatures.RightEyeClosed
+                    | FaceFrameFeatures.LookingAway
+                    | FaceFrameFeatures.MouthMoved
+                    | FaceFrameFeatures.MouthOpen;
+                for (int i = 0; i < kinect.BodyFrameSource.BodyCount; ++i)
+                {
+                    this.faceFrameSources[i] = new FaceFrameSource(this.kinect, 0, faceFrameFeatures);
+                    this.faceFrameReaders[i] = this.faceFrameSources[i].OpenReader();
+                }
+
+                // allocate storage to store face frame results for each face in the FOV
+                this.faceFrameResults = new FaceFrameResult[kinect.BodyFrameSource.BodyCount];
+                this.faceBuffer = new byte[BUFFER_SIZE_FACE];
+
                 this.reader.MultiSourceFrameArrived += this.frameArrivedCallback;
                 this.bodyReader.FrameArrived += this.bodyArrivedCallback;
+                for (int i = 0; i < kinect.BodyFrameSource.BodyCount; ++i)
+                {
+                    faceFrameReaders[i].FrameArrived += this.faceArrivedCallback;
+                }
+
                 this.updateFPSMilestone = DateTime.Now + TimeSpan.FromSeconds(this.deltaTimeForFPS);
+
+                this.kinect.Open();
             }
         }
 
@@ -263,6 +300,7 @@ namespace Kinect2Server
             this.colorConnector = new AsyncNetworkConnectorServer(colorPort);
             this.locationConnector = new AsyncNetworkConnectorServer(locationPort);
             this.bodyConnector = new AsyncNetworkConnectorServer(bodyPort);
+            this.faceConnector = new AsyncNetworkConnectorServer(facePort);
 
             this.colorIPBox.Text = this.colorConnector.selfEndPoint.ToString();
             this.locationIPBox.Text = this.locationConnector.selfEndPoint.ToString();
@@ -270,6 +308,7 @@ namespace Kinect2Server
             this.colorConnector.startListening();
             this.locationConnector.startListening();
             this.bodyConnector.startListening();
+            this.faceConnector.startListening();
         }
 
         private void MainWindow_Closing(object sender, CancelEventArgs e)
@@ -279,7 +318,26 @@ namespace Kinect2Server
                 this.reader.Dispose();
                 this.reader = null;
             }
-            if (this.reader != null)
+            if (this.bodyReader != null)
+            {
+                this.bodyReader.Dispose();
+                this.bodyReader = null;
+            }
+            for (int i = 0; i < kinect.BodyFrameSource.BodyCount; i++)
+            {
+                if (this.faceFrameReaders[i] != null)
+                {
+                    this.faceFrameReaders[i].Dispose();
+                    this.faceFrameReaders[i] = null;
+                }
+
+                if (this.faceFrameSources[i] != null)
+                {
+                    this.faceFrameSources[i].Dispose();
+                    this.faceFrameSources[i] = null;
+                }
+            }
+            if (this.kinect != null)
             {
                 this.kinect.Close();
                 this.kinect = null;
@@ -287,6 +345,7 @@ namespace Kinect2Server
             this.colorConnector.closeSocket();
             this.locationConnector.closeSocket();
             this.bodyConnector.closeSocket();
+            this.faceConnector.closeSocket();
         }
 
         private void bodyArrivedCallback(object sender, BodyFrameArrivedEventArgs e)
@@ -300,8 +359,55 @@ namespace Kinect2Server
                     string jsonString = JsonConvert.SerializeObject(this.bodyArray);
                     System.Buffer.BlockCopy(ASCIIEncoding.ASCII.GetBytes(jsonString), 0, bodyBuffer, 0, jsonString.Length);
                     this.bodyConnector.sendToAll(bodyBuffer);
+
+                    for (int i = 0; i < kinect.BodyFrameSource.BodyCount; i++)
+                    {
+                        // check if a valid face is tracked in this face source
+                        if (this.faceFrameSources[i].IsTrackingIdValid)
+                        {
+                        }
+                        else
+                        {
+                            // check if the corresponding body is tracked 
+                            if (this.bodyArray[i].IsTracked)
+                            {
+                                // update the face frame source to track this body
+                                this.faceFrameSources[i].TrackingId = this.bodyArray[i].TrackingId;
+                            }
+                        }
+                    }
                 }
             }
+        }
+
+        private void faceArrivedCallback(object sender, FaceFrameArrivedEventArgs e)
+        {
+            Debug.WriteLine("face frame arrived!");
+            using (FaceFrame faceFrame = e.FrameReference.AcquireFrame())
+            {
+                if (faceFrame != null && faceFrame.FaceFrameResult != null)
+                {
+                    int index = this.GetFaceSourceIndex(faceFrame.FaceFrameSource);
+
+                    this.faceFrameResults[index] = faceFrame.FaceFrameResult;
+                    string jsonString = JsonConvert.SerializeObject(this.faceFrameResults);
+                    System.Buffer.BlockCopy(ASCIIEncoding.ASCII.GetBytes(jsonString), 0, faceBuffer, 0, jsonString.Length);
+                    this.faceConnector.sendToAll(faceBuffer);
+                }
+            }
+        }
+        private int GetFaceSourceIndex(FaceFrameSource faceFrameSource)
+        {
+            int index = -1;
+            for (int i = 0; i < kinect.BodyFrameSource.BodyCount; i++)
+            {
+                if (this.faceFrameSources[i] == faceFrameSource)
+                {
+                    index = i;
+                    break;
+                }
+            }
+            return index;
         }
 
         private void frameArrivedCallback(object sender, MultiSourceFrameArrivedEventArgs e)
