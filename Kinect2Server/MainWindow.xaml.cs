@@ -22,6 +22,15 @@ using Newtonsoft.Json;
 
 namespace Kinect2Server
 {
+    public class BodyInfo
+    {
+        public Body Body { get; set; }
+        public int FromX { get; set; }
+        public int ToX { get; set; }
+        public int FromY { get; set; }
+        public int ToY { get; set; }
+    };
+
     public class FlaggedSocket
     {
         public Socket socket;
@@ -192,7 +201,7 @@ namespace Kinect2Server
         private byte[] bodyBuffer = null;
 
         private double numFramesPassed = 0;
-        private double deltaTimeForFPS = 0.2;//In seconds
+        private double deltaTimeForFPS = 0.02;//In seconds
         private DateTime updateFPSMilestone = DateTime.Now;
 
         private readonly int bytesPerColorPixel = (PixelFormats.Bgr32.BitsPerPixel + 7) / 8;
@@ -294,10 +303,36 @@ namespace Kinect2Server
             //Console.WriteLine("body frame arrived!");
             using (BodyFrame bodyFrame = e.FrameReference.AcquireFrame())
             {
+                BodyInfo[] infoes = null;
                 if (bodyFrame != null)
                 {
                     bodyFrame.GetAndRefreshBodyData(this.bodyArray);
-                    string jsonString = JsonConvert.SerializeObject(this.bodyArray);
+                    int num_body = bodyFrame.BodyCount;
+                    infoes = new BodyInfo[num_body];
+                    for (int i = 0; i < num_body; i++)
+                    {
+                        infoes[i] = new BodyInfo();
+                        infoes[i].Body = bodyArray[i];
+                        infoes[i].FromX = int.MaxValue;
+                        infoes[i].ToX = int.MinValue;
+                        infoes[i].FromY = int.MaxValue;
+                        infoes[i].ToY = int.MinValue;
+                        foreach (Joint joint in bodyArray[i].Joints.Values )
+                        {
+                            CoordinateMapper mapper = bodyFrame.BodyFrameSource.KinectSensor.CoordinateMapper;
+                            ColorSpacePoint point = mapper.MapCameraPointToColorSpace(joint.Position);
+                            int x = (int)point.X;
+                            int y = (int)point.Y;
+                            if (x >= 0 && y >= 0)
+                            {
+                                infoes[i].FromX = x < infoes[i].FromX ? x : infoes[i].FromX;
+                                infoes[i].FromY = y < infoes[i].FromY ? y : infoes[i].FromY;
+                                infoes[i].ToX = x > infoes[i].ToX ? x : infoes[i].ToX;
+                                infoes[i].ToY = y > infoes[i].ToY ? y : infoes[i].ToY;
+                            }
+                        }
+                    }
+                    string jsonString = JsonConvert.SerializeObject(infoes);
                     System.Buffer.BlockCopy(ASCIIEncoding.ASCII.GetBytes(jsonString), 0, bodyBuffer, 0, jsonString.Length);
                     this.bodyConnector.sendToAll(bodyBuffer);
                 }
