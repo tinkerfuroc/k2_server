@@ -1,4 +1,15 @@
-﻿using System;
+﻿/* tinker2016:
+ *  the Kinect server on Windows, send info to ROS
+ * 
+ * color
+ * depth
+ * body
+ * face
+ * audio(angle)
+ * 
+ */
+
+using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
@@ -188,12 +199,15 @@ namespace Kinect2Server
     /// </summary>
     public partial class MainWindow : Window
     {
+        // Kinect and its readers
         private KinectSensor kinect = null;
         private Stopwatch stopwatch = null;
         private MultiSourceFrameReader reader = null;
         private BodyFrameReader bodyReader = null;
-        private FaceFrameReader faceReader = null;
+        //private FaceFrameReader faceReader = null;
+        private AudioBeamFrameReader audioReader = null;
 
+        // Data
         private byte[] colourArray = null;
         private CoordinateMapper coordinateMapper = null;
         private ushort[] depthArray = null;
@@ -206,7 +220,7 @@ namespace Kinect2Server
         private FaceFrameReader[] faceFrameReaders = null;
         private FaceFrameResult[] faceFrameResults = null;
         private byte[] faceBuffer = null;
-        //private int bodyCount;
+        private byte[] audioBuffer = null;
 
         private double numFramesPassed = 0;
         private double deltaTimeForFPS = 0.02;//In seconds
@@ -220,6 +234,7 @@ namespace Kinect2Server
         private AsyncNetworkConnectorServer locationConnector = null;
         private AsyncNetworkConnectorServer bodyConnector = null;
         private AsyncNetworkConnectorServer faceConnector = null;
+        private AsyncNetworkConnectorServer audioConnector = null;
 
         private const int BUFFER_SIZE_COLOR = 1920 * 1080 * 4;
         private const int BUFFER_SIZE_LOCATION = 1920 * 1080 * 3;
@@ -229,6 +244,7 @@ namespace Kinect2Server
         private const int colorPort = 9000;
         private const int bodyPort = 9003;
         private const int facePort = 9006; // TODO  confirm the port
+        private const int audioPort = 9009;
         private const int locationPort = 18000;
 
         private const string hostName = "herb2";
@@ -297,8 +313,16 @@ namespace Kinect2Server
                     faceFrameReaders[i].FrameArrived += this.faceArrivedCallback;
                 }
 
-                this.updateFPSMilestone = DateTime.Now + TimeSpan.FromSeconds(this.deltaTimeForFPS);
+                // audioReader
+                AudioSource audioSource = this.kinect.AudioSource;
+                this.audioBuffer = new byte[audioSource.SubFrameLengthInBytes];
+                this.audioReader = audioSource.OpenReader();
+                this.audioReader.FrameArrived += this.audioArrivedCallback;
 
+                // fps
+                this.updateFPSMilestone = DateTime.Now + TimeSpan.FromSeconds(this.deltaTimeForFPS);
+                
+                // initialization finished
                 this.kinect.Open();
             }
         }
@@ -310,7 +334,9 @@ namespace Kinect2Server
             this.locationConnector = new AsyncNetworkConnectorServer(locationPort);
             this.bodyConnector = new AsyncNetworkConnectorServer(bodyPort);
             this.faceConnector = new AsyncNetworkConnectorServer(facePort);
+            this.audioConnector = new AsyncNetworkConnectorServer(audioPort);
 
+            //UI
             this.colorIPBox.Text = this.colorConnector.selfEndPoint.ToString();
             this.locationIPBox.Text = this.locationConnector.selfEndPoint.ToString();
             //Create the connections
@@ -318,6 +344,7 @@ namespace Kinect2Server
             this.locationConnector.startListening();
             this.bodyConnector.startListening();
             this.faceConnector.startListening();
+            this.audioConnector.startListening();
         }
 
         private void MainWindow_Closing(object sender, CancelEventArgs e)
@@ -355,6 +382,7 @@ namespace Kinect2Server
             this.locationConnector.closeSocket();
             this.bodyConnector.closeSocket();
             this.faceConnector.closeSocket();
+            this.audioConnector.closeSocket();
         }
 
         private void bodyArrivedCallback(object sender, BodyFrameArrivedEventArgs e)
@@ -417,7 +445,7 @@ namespace Kinect2Server
 
         private void faceArrivedCallback(object sender, FaceFrameArrivedEventArgs e)
         {
-            Debug.WriteLine("face frame arrived!");
+            //Debug.WriteLine("face frame arrived!");
             using (FaceFrame faceFrame = e.FrameReference.AcquireFrame())
             {
                 if (faceFrame != null && faceFrame.FaceFrameResult != null)
@@ -443,6 +471,35 @@ namespace Kinect2Server
                 }
             }
             return index;
+        }
+
+        private void audioArrivedCallback(object sender, AudioBeamFrameArrivedEventArgs e) 
+        {
+            AudioBeamFrameReference frameReference = e.FrameReference;
+            AudioBeamFrameList frameList = frameReference.AcquireBeamFrames();
+
+            if (frameList != null)
+            {
+                // AudioBeamFrameList is IDisposable
+                using (frameList)
+                {
+                    // Only one audio beam is supported. Get the sub frame list for this beam
+                    IReadOnlyList<AudioBeamSubFrame> subFrameList = frameList[0].SubFrames;
+
+                    if (subFrameList.Count > 0) 
+                    {
+                        AudioBeamSubFrame subFrame = subFrameList[0];  // TODO 
+                        Debug.WriteLine(subFrame.BeamAngle + " " + subFrame.BeamAngleConfidence);
+                        if (subFrame.BeamAngleConfidence > 0.6)
+                        {
+                            float angle = subFrame.BeamAngle * 3.1415926f / 2; // TODO: check the formula
+                            // send socket here
+                            byte[] tempBuffer = BitConverter.GetBytes(angle);
+                            this.audioConnector.sendToAll(tempBuffer);
+                        }
+                    }
+                }
+            }
         }
 
         private void frameArrivedCallback(object sender, MultiSourceFrameArrivedEventArgs e)
