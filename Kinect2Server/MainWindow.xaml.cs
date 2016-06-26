@@ -5,7 +5,6 @@
  * depth
  * body
  * face
- * audio(angle)
  * 
  */
 
@@ -205,7 +204,7 @@ namespace Kinect2Server
         private MultiSourceFrameReader reader = null;
         private BodyFrameReader bodyReader = null;
         //private FaceFrameReader faceReader = null;
-        private AudioBeamFrameReader audioReader = null;
+        //private AudioBeamFrameReader audioReader = null;
 
         // Data
         private byte[] colourArray = null;
@@ -220,7 +219,7 @@ namespace Kinect2Server
         private FaceFrameReader[] faceFrameReaders = null;
         private FaceFrameResult[] faceFrameResults = null;
         private byte[] faceBuffer = null;
-        private byte[] audioBuffer = null;
+        //private byte[] audioBuffer = null;
 
         private double numFramesPassed = 0;
         private double deltaTimeForFPS = 0.02;//In seconds
@@ -234,20 +233,20 @@ namespace Kinect2Server
         private AsyncNetworkConnectorServer locationConnector = null;
         private AsyncNetworkConnectorServer bodyConnector = null;
         private AsyncNetworkConnectorServer faceConnector = null;
-        private AsyncNetworkConnectorServer audioConnector = null;
-        private AsyncNetworkConnectorServer audioStreamConnector = null;
+        //private AsyncNetworkConnectorServer audioConnector = null;
+        //private AsyncNetworkConnectorServer audioStreamConnector = null;
 
         private const int BUFFER_SIZE_COLOR = 1920 * 1080 * 4;
         private const int BUFFER_SIZE_LOCATION = 1920 * 1080 * 3;
         private const int BUFFER_SIZE_BODY = 60000;
         private const int BUFFER_SIZE_FACE = 60000; //TODO  confirm the size
-        private const int BUFFER_SIZE_AUDIO = 1024;
+        //private const int BUFFER_SIZE_AUDIO = 1024;
 
         private const int colorPort = 9000;
         private const int bodyPort = 9003;
         private const int facePort = 9006; // TODO  confirm the port
-        private const int audioPort = 9009;
-        private const int audioStreamPort = 9012;
+        //private const int audioPort = 9009;
+        //private const int audioStreamPort = 9012;
         private const int locationPort = 18000;
 
         private const string hostName = "herb2";
@@ -317,10 +316,10 @@ namespace Kinect2Server
                 }
 
                 // audioReader
-                AudioSource audioSource = this.kinect.AudioSource;
-                this.audioBuffer = new byte[audioSource.SubFrameLengthInBytes];
-                this.audioReader = audioSource.OpenReader();
-                this.audioReader.FrameArrived += this.audioArrivedCallback;
+                //AudioSource audioSource = this.kinect.AudioSource;
+                //this.audioBuffer = new byte[audioSource.SubFrameLengthInBytes];
+                //this.audioReader = audioSource.OpenReader();
+                //this.audioReader.FrameArrived += this.audioArrivedCallback;
 
                 // fps
                 this.updateFPSMilestone = DateTime.Now + TimeSpan.FromSeconds(this.deltaTimeForFPS);
@@ -337,8 +336,8 @@ namespace Kinect2Server
             this.locationConnector = new AsyncNetworkConnectorServer(locationPort);
             this.bodyConnector = new AsyncNetworkConnectorServer(bodyPort);
             this.faceConnector = new AsyncNetworkConnectorServer(facePort);
-            this.audioConnector = new AsyncNetworkConnectorServer(audioPort);
-            this.audioStreamConnector = new AsyncNetworkConnectorServer(audioStreamPort);
+            //this.audioConnector = new AsyncNetworkConnectorServer(audioPort);
+            //this.audioStreamConnector = new AsyncNetworkConnectorServer(audioStreamPort);
 
             //UI
             this.colorIPBox.Text = this.colorConnector.selfEndPoint.ToString();
@@ -348,8 +347,8 @@ namespace Kinect2Server
             this.locationConnector.startListening();
             this.bodyConnector.startListening();
             this.faceConnector.startListening();
-            this.audioConnector.startListening();
-            this.audioStreamConnector.startListening();
+            //this.audioConnector.startListening();
+            //this.audioStreamConnector.startListening();
         }
 
         private void MainWindow_Closing(object sender, CancelEventArgs e)
@@ -387,8 +386,8 @@ namespace Kinect2Server
             this.locationConnector.closeSocket();
             this.bodyConnector.closeSocket();
             this.faceConnector.closeSocket();
-            this.audioConnector.closeSocket();
-            this.audioStreamConnector.closeSocket();
+            //this.audioConnector.closeSocket();
+            //this.audioStreamConnector.closeSocket();
         }
 
         private void bodyArrivedCallback(object sender, BodyFrameArrivedEventArgs e)
@@ -479,37 +478,38 @@ namespace Kinect2Server
             return index;
         }
 
-        private void audioArrivedCallback(object sender, AudioBeamFrameArrivedEventArgs e) 
-        {
-            AudioBeamFrameReference frameReference = e.FrameReference;
-            AudioBeamFrameList frameList = frameReference.AcquireBeamFrames();
+        //private void audioArrivedCallback(object sender, AudioBeamFrameArrivedEventArgs e) 
+        //{
+        //    AudioBeamFrameReference frameReference = e.FrameReference;
+        //    AudioBeamFrameList frameList = frameReference.AcquireBeamFrames();
 
-            if (frameList != null)
-            {
-                // AudioBeamFrameList is IDisposable
-                using (frameList)
-                {
-                    // Only one audio beam is supported. Get the sub frame list for this beam
-                    IReadOnlyList<AudioBeamSubFrame> subFrameList = frameList[0].SubFrames;
+        //    if (frameList != null)
+        //    {
+        //        // AudioBeamFrameList is IDisposable
+        //        using (frameList)
+        //        {
+        //            // Only one audio beam is supported. Get the sub frame list for this beam
+        //            IReadOnlyList<AudioBeamSubFrame> subFrameList = frameList[0].SubFrames;
 
-                    if (subFrameList.Count > 0) 
-                    {
-                        AudioBeamSubFrame subFrame = subFrameList[0];  // TODO 
-                        if (subFrame.BeamAngleConfidence > 0.6)
-                        {
-                            float angle = subFrame.BeamAngle * 3.1415926f / 2; // TODO: check the formula
-                            Debug.WriteLine("audio angle:" + angle + " " + subFrame.BeamAngleConfidence);
-                            // send socket here
-                            byte[] tempBuffer = BitConverter.GetBytes(angle);
-                            this.audioConnector.sendToAll(tempBuffer);
-                        }
+        //            if (subFrameList.Count > 0) 
+        //            {
+        //                AudioBeamSubFrame subFrame = subFrameList[0];  // TODO 
+        //                if (subFrame.BeamAngleConfidence > 0.6)
+        //                {
+        //                    float angle = subFrame.BeamAngle * 3.1415926f / 2; // TODO: check the formula
+        //                    Debug.WriteLine("audio angle:" + angle + " " + subFrame.BeamAngleConfidence);
+        //                    // send socket here
+        //                    byte[] tempBuffer = BitConverter.GetBytes(angle);
+        //                    this.audioConnector.sendToAll(tempBuffer);
+        //                }
 
-                        subFrame.CopyFrameDataToArray(this.audioBuffer);
-                        this.audioStreamConnector.sendToAll(audioBuffer);
-                    }
-                }
-            }
-        }
+        //                //subFrame.CopyFrameDataToArray(this.audioBuffer);
+        //                //this.audioStreamConnector.sendToAll(audioBuffer);
+        //                //Debug.WriteLine(DateTime.Now+" "+audioBuffer.Count());
+        //            }
+        //        }
+        //    }
+        //}
 
         private void frameArrivedCallback(object sender, MultiSourceFrameArrivedEventArgs e)
         {
