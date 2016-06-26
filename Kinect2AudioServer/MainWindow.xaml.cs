@@ -30,14 +30,6 @@ using Newtonsoft.Json;
 
 namespace Kinect2Server
 {
-    public class BodyInfo
-    {
-        public Body Body { get; set; }
-        public int FromX { get; set; }
-        public int ToX { get; set; }
-        public int FromY { get; set; }
-        public int ToY { get; set; }
-    };
 
     public class FlaggedSocket
     {
@@ -200,6 +192,12 @@ namespace Kinect2Server
         private Stopwatch stopwatch = null;
         private AudioBeamFrameReader audioReader = null;
 
+        private int sec = 0;
+        private int cnt = 0;
+
+        // Thread
+        Thread readingAudioThread; 
+
         // Data
         private byte[] audioBuffer = null;
 
@@ -207,8 +205,7 @@ namespace Kinect2Server
         private double deltaTimeForFPS = 0.002;//In seconds
         private DateTime updateFPSMilestone = DateTime.Now;
 
-        private readonly int bytesPerColorPixel = (PixelFormats.Bgr32.BitsPerPixel + 7) / 8;
-        //private readonly int bytesPerLocationPixel = 6;
+        private KinectAudioStream convertStream = null;
 
         //TCP/IP crap
         private AsyncNetworkConnectorServer audioConnector = null;
@@ -241,7 +238,14 @@ namespace Kinect2Server
 
                 // fps
                 this.updateFPSMilestone = DateTime.Now + TimeSpan.FromSeconds(this.deltaTimeForFPS);
-                
+
+                // Audio Stream
+                IReadOnlyList<AudioBeam> audioBeamList = this.kinect.AudioSource.AudioBeams;
+                System.IO.Stream audioStream = audioBeamList[0].OpenInputStream();
+                // create the convert stream
+                this.convertStream = new KinectAudioStream(audioStream);
+                this.convertStream.SpeechActive = true;
+
                 // initialization finished
                 this.kinect.Open();
             }
@@ -256,10 +260,17 @@ namespace Kinect2Server
             //Create the connections
             this.audioConnector.startListening();
             this.audioStreamConnector.startListening();
+
+            // thread
+            readingAudioThread = new Thread(this.endlessAudioReading);
+            readingAudioThread.Start();
         }
 
         private void MainWindow_Closing(object sender, CancelEventArgs e)
         {
+            this.convertStream.SpeechActive = false;
+            readingAudioThread.Abort();
+
             if (this.kinect != null)
             {
                 this.kinect.Close();
@@ -294,11 +305,37 @@ namespace Kinect2Server
                             this.audioConnector.sendToAll(tempBuffer);
                         }
 
-                        subFrame.CopyFrameDataToArray(this.audioBuffer);
-                        this.audioStreamConnector.sendToAll(audioBuffer);
-                        Debug.WriteLine(DateTime.Now+" "+audioBuffer.Count());
+                        //subFrame.CopyFrameDataToArray(this.audioBuffer);
+                        //this.audioStreamConnector.sendToAll(audioBuffer);
+                        //if (DateTime.Now.Second != sec)
+                        //{
+                        //    Debug.WriteLine(cnt);
+                        //    sec = DateTime.Now.Second;
+                        //    cnt = 0;
+                        //}
+                        //cnt++;
                     }
                 }
+            }
+        }
+
+        private void endlessAudioReading()
+        {
+            while (this.convertStream.SpeechActive)
+            {
+                if (1024 == this.convertStream.Read(audioBuffer, 0, 1024))
+                {
+                    audioStreamConnector.sendToAll(audioBuffer);
+                    //Console.WriteLine(DateTime.Now+" audio received");
+                    if (DateTime.Now.Second != sec)
+                    {
+                        Debug.WriteLine(cnt);
+                        sec = DateTime.Now.Second;
+                        cnt = 0;
+                    }
+                    cnt++;
+                }
+
             }
         }
 
